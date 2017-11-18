@@ -52,6 +52,11 @@
         <artifactId>proton-j</artifactId>
         <version>${project.version}</version>
       </dependency>
+      <dependency>
+        <groupId>org.apache.qpid</groupId>
+        <artifactId>proton-j-benchmarks</artifactId>
+        <version>${project.version}</version>
+      </dependency>
       <!-- Test dependencies -->
       <dependency>
         <groupId>junit</groupId>
@@ -162,6 +167,7 @@
     <module>examples/engine</module>
     <module>examples/reactor</module>
     <module>apache-qpid-proton-j</module>
+    <module>proton-j-benchmarks</module>
   </modules>
 
   <url>http://qpid.apache.org/proton</url>
