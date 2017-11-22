@@ -41,7 +41,7 @@ public class StringType extends AbstractPrimitiveType<String>
                 {
                     return "";
                 }
-                //treat it optimistically like an 8 bit encoding
+                //treat it optimistically like an 8 bit encoding: extended US-ASCII
                 final CharsetDecoder charsetDecoder = decoder.getCharsetDecoder();
                 final int maxExpectedSize = Math.round(charsetDecoder.maxCharsPerByte()) * remaining;
                 final CharBuffer out = decoder.acquireHeapDecodingBuffer(maxExpectedSize);
@@ -50,7 +50,7 @@ public class StringType extends AbstractPrimitiveType<String>
                 int i;
                 for (i = 0; i < remaining; i++)
                 {
-                    final byte b = buf.get(bufferInitialPosition + i);
+                    final int b = buf.get(bufferInitialPosition + i);
                     if (b < 0)
                     {
                         //it is not an 8 bit encoding :(
