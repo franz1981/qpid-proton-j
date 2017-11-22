@@ -44,7 +44,8 @@ public class StringType extends AbstractPrimitiveType<String>
                 //treat it optimistically like an 8 bit encoding
                 final CharsetDecoder charsetDecoder = decoder.getCharsetDecoder();
                 final int maxExpectedSize = Math.round(charsetDecoder.maxCharsPerByte()) * remaining;
-                final char[] chars = new char[maxExpectedSize];
+                final CharBuffer out = decoder.acquireHeapDecodingBuffer(maxExpectedSize);
+                final char[] chars = out.array();
                 final int bufferInitialPosition = buf.position();
                 int i;
                 for (i = 0; i < remaining; i++)
@@ -66,7 +67,6 @@ public class StringType extends AbstractPrimitiveType<String>
                     return new String(chars, 0, remaining);
                 }
                 //better to continue using a proper decoder and keeping the work done
-                final CharBuffer out = CharBuffer.wrap(chars);
                 out.position(i);
                 return decodeUsingDecoder(buf, out, charsetDecoder);
             }

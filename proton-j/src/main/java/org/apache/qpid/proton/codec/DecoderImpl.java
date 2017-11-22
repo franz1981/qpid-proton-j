@@ -21,20 +21,11 @@
 package org.apache.qpid.proton.codec;
 
 import org.apache.qpid.proton.ProtonException;
-import org.apache.qpid.proton.amqp.Binary;
-import org.apache.qpid.proton.amqp.Decimal128;
-import org.apache.qpid.proton.amqp.Decimal32;
-import org.apache.qpid.proton.amqp.Decimal64;
-import org.apache.qpid.proton.amqp.DescribedType;
-import org.apache.qpid.proton.amqp.Symbol;
-import org.apache.qpid.proton.amqp.UnsignedByte;
-import org.apache.qpid.proton.amqp.UnsignedInteger;
-import org.apache.qpid.proton.amqp.UnsignedLong;
-import org.apache.qpid.proton.amqp.UnsignedShort;
+import org.apache.qpid.proton.amqp.*;
 
-import java.io.IOException;
 import java.lang.reflect.Array;
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -44,7 +35,7 @@ public class DecoderImpl implements ByteBufferDecoder
     private ByteBuffer _buffer;
 
     private final CharsetDecoder _charsetDecoder = StandardCharsets.UTF_8.newDecoder();
-
+    private CharBuffer decodingHeapBuffer = null;
     private final PrimitiveTypeEncoding[] _constructors = new PrimitiveTypeEncoding[256];
     private final Map<Object, DescribedTypeConstructor> _dynamicTypeConstructors =
             new HashMap<Object, DescribedTypeConstructor>();
@@ -59,6 +50,23 @@ public class DecoderImpl implements ByteBufferDecoder
     DecoderImpl(final ByteBuffer buffer)
     {
         _buffer = buffer;
+    }
+
+    /**
+     * It borrows a heap {@link CharBuffer} instance with {@link CharBuffer#capacity()}{@code >= requiredSize}.
+     * <p>
+     * The instance borrowed can't be reused, but locally and can't be retained (or passed to function that could retain it).
+     */
+    protected final CharBuffer acquireHeapDecodingBuffer(int requiredSize)
+    {
+        //here the logic to choose if pool until a particular size or provide a fresh instance
+        if (this.decodingHeapBuffer == null || this.decodingHeapBuffer.capacity() < requiredSize)
+        {
+            final CharBuffer charBuffer = CharBuffer.allocate(requiredSize);
+            this.decodingHeapBuffer = charBuffer;
+        }
+        this.decodingHeapBuffer.clear().limit(requiredSize);
+        return this.decodingHeapBuffer;
     }
 
     public TypeConstructor<?> peekConstructor()
