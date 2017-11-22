@@ -21,8 +21,10 @@
 package org.apache.qpid.proton.codec;
 
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
 import java.util.Arrays;
 import java.util.Collection;
 
@@ -34,22 +36,75 @@ public class StringType extends AbstractPrimitiveType<String>
 
             public String decode(DecoderImpl decoder, final ByteBuffer buf)
             {
-                CharsetDecoder charsetDecoder = decoder.getCharsetDecoder();
-                try
+                final int remaining = buf.remaining();
+                if (remaining == 0)
                 {
-                    return decoder.getCharsetDecoder().decode(buf).toString();
+                    return "";
                 }
-                catch (CharacterCodingException e)
+                //treat it optimistically like an 8 bit encoding
+                final CharsetDecoder charsetDecoder = decoder.getCharsetDecoder();
+                final int maxExpectedSize = Math.round(charsetDecoder.maxCharsPerByte()) * remaining;
+                final char[] chars = new char[maxExpectedSize];
+                final int bufferInitialPosition = buf.position();
+                int i;
+                for (i = 0; i < remaining; i++)
                 {
-                    throw new IllegalArgumentException("Cannot parse String");
+                    final byte b = buf.get(bufferInitialPosition + i);
+                    if (b < 0)
+                    {
+                        //it is not an 8 bit encoding :(
+                        break;
+                    }
+                    chars[i] = (char) b;
                 }
-                finally
+                //simulate consuming of buf
+                buf.position(bufferInitialPosition + i);
+                if (i == remaining)
                 {
-                    charsetDecoder.reset();
+                    assert !buf.hasRemaining();
+                    //we've done with 8 bit encoding
+                    return new String(chars, 0, remaining);
                 }
+                //better to continue using a proper decoder and keeping the work done
+                final CharBuffer out = CharBuffer.wrap(chars);
+                out.position(i);
+                return decodeUsingDecoder(buf, out, charsetDecoder);
             }
         };
 
+    private static String decodeUsingDecoder(
+        final ByteBuffer buf,
+        final CharBuffer out,
+        final CharsetDecoder charsetDecoder)
+    {
+        try
+        {
+            for (; ; )
+            {
+                CoderResult cr = buf.hasRemaining() ? charsetDecoder.decode(buf, out, true) : CoderResult.UNDERFLOW;
+                if (cr.isUnderflow())
+                {
+                    cr = charsetDecoder.flush(out);
+                }
+                if (cr.isUnderflow())
+                {
+                    break;
+                }
+                //overflow is an error condition here: we've size the char buffer in order to be big enough
+                cr.throwException();
+            }
+            out.flip();
+            return out.toString();
+        }
+        catch (CharacterCodingException e)
+        {
+            throw new IllegalArgumentException("Cannot parse String");
+        }
+        finally
+        {
+            charsetDecoder.reset();
+        }
+    }
 
     public static interface StringEncoding extends PrimitiveTypeEncoding<String>
     {
