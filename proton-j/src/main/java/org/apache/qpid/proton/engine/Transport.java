@@ -20,10 +20,10 @@
  */
 package org.apache.qpid.proton.engine;
 
-import java.nio.ByteBuffer;
-
 import org.apache.qpid.proton.amqp.transport.ErrorCondition;
 import org.apache.qpid.proton.engine.impl.TransportImpl;
+
+import java.nio.ByteBuffer;
 
 
 /**
@@ -74,6 +74,8 @@ public interface Transport extends Endpoint
         }
     }
 
+    public static final String DISABLE_READONLY_BUFFER_PROPERTY = "proton.disable_readonly_buffer";
+    public static final boolean DISABLE_READONLY_BUFFER = Boolean.getBoolean(DISABLE_READONLY_BUFFER_PROPERTY);
     public static final int TRACE_OFF = 0;
     public static final int TRACE_RAW = 1;
     public static final int TRACE_FRM = 2;

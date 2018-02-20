@@ -21,21 +21,20 @@
 package org.apache.qpid.proton.engine.impl.ssl;
 
 
-import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.newWriteableBuffer;
-
-import java.nio.ByteBuffer;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import org.apache.qpid.proton.engine.Transport;
+import org.apache.qpid.proton.engine.TransportException;
+import org.apache.qpid.proton.engine.impl.TransportInput;
+import org.apache.qpid.proton.engine.impl.TransportOutput;
 
 import javax.net.ssl.SSLEngineResult;
 import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 import javax.net.ssl.SSLEngineResult.Status;
 import javax.net.ssl.SSLException;
+import java.nio.ByteBuffer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
-import org.apache.qpid.proton.engine.Transport;
-import org.apache.qpid.proton.engine.TransportException;
-import org.apache.qpid.proton.engine.impl.TransportInput;
-import org.apache.qpid.proton.engine.impl.TransportOutput;
+import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.newWriteableBuffer;
 
 /**
  * TODO close the SSLEngine when told to, and modify {@link #wrapOutput()} and {@link #unwrapInput()}
@@ -84,7 +83,7 @@ public class SimpleSslTransportWrapper implements SslTransportWrapper
         // as stated in SSLEngine JavaDoc.
         _inputBuffer = newWriteableBuffer(packetSize);
         _outputBuffer = newWriteableBuffer(packetSize);
-        _head = _outputBuffer.asReadOnlyBuffer();
+        _head = Transport.DISABLE_READONLY_BUFFER ? _outputBuffer.duplicate() : _outputBuffer.asReadOnlyBuffer();
         _head.limit(0);
 
         _decodedInputBuffer = newWriteableBuffer(effectiveAppBufferMax);
@@ -228,7 +227,7 @@ public class SimpleSslTransportWrapper implements SslTransportWrapper
             case BUFFER_OVERFLOW:
                 ByteBuffer old = _outputBuffer;
                 _outputBuffer = newWriteableBuffer(_outputBuffer.capacity()*2);
-                _head = _outputBuffer.asReadOnlyBuffer();
+                _head = Transport.DISABLE_READONLY_BUFFER ? _outputBuffer.duplicate() : _outputBuffer.asReadOnlyBuffer();
                 old.flip();
                 _outputBuffer.put(old);
                 continue;

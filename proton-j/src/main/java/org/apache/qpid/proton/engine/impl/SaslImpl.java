@@ -21,23 +21,9 @@
 
 package org.apache.qpid.proton.engine.impl;
 
-import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.newWriteableBuffer;
-import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.pourAll;
-import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.pourBufferToArray;
-
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
 import org.apache.qpid.proton.amqp.Binary;
 import org.apache.qpid.proton.amqp.Symbol;
-import org.apache.qpid.proton.amqp.security.SaslChallenge;
-import org.apache.qpid.proton.amqp.security.SaslCode;
-import org.apache.qpid.proton.amqp.security.SaslFrameBody;
-import org.apache.qpid.proton.amqp.security.SaslInit;
-import org.apache.qpid.proton.amqp.security.SaslMechanisms;
-import org.apache.qpid.proton.amqp.security.SaslResponse;
+import org.apache.qpid.proton.amqp.security.*;
 import org.apache.qpid.proton.codec.AMQPDefinedTypes;
 import org.apache.qpid.proton.codec.DecoderImpl;
 import org.apache.qpid.proton.codec.EncoderImpl;
@@ -45,6 +31,13 @@ import org.apache.qpid.proton.engine.Sasl;
 import org.apache.qpid.proton.engine.SaslListener;
 import org.apache.qpid.proton.engine.Transport;
 import org.apache.qpid.proton.engine.TransportException;
+
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.*;
 
 public class SaslImpl implements Sasl, SaslFrameBody.SaslFrameBodyHandler<Void>, SaslFrameHandler, TransportLayer
 {
@@ -551,7 +544,7 @@ public class SaslImpl implements Sasl, SaslFrameBody.SaslFrameBodyHandler<Void>,
         {
             _underlyingInput = input;
             _underlyingOutput = output;
-            _head = _outputBuffer.asReadOnlyBuffer();
+            _head = Transport.DISABLE_READONLY_BUFFER ? _outputBuffer.duplicate() : _outputBuffer.asReadOnlyBuffer();
             _head.limit(0);
         }
 

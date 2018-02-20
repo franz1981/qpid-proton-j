@@ -18,11 +18,12 @@
  */
 package org.apache.qpid.proton.engine.impl;
 
-import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.*;
+import org.apache.qpid.proton.engine.Transport;
 
 import java.nio.ByteBuffer;
 
-import org.apache.qpid.proton.engine.Transport;
+import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.newReadableBuffer;
+import static org.apache.qpid.proton.engine.impl.ByteBufferUtils.newWriteableBuffer;
 
 class TransportOutputAdaptor implements TransportOutput
 {
@@ -104,7 +105,7 @@ class TransportOutputAdaptor implements TransportOutput
 
     private void init_buffers() {
         _outputBuffer = newWriteableBuffer(_maxFrameSize);
-        _head = _outputBuffer.asReadOnlyBuffer();
+        _head = Transport.DISABLE_READONLY_BUFFER ? _outputBuffer.duplicate() : _outputBuffer.asReadOnlyBuffer();
         _head.limit(0);
     }
 

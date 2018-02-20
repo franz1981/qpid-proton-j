@@ -20,9 +20,10 @@
  */
 package org.apache.qpid.proton.engine.impl.ssl;
 
-import java.nio.ByteBuffer;
-
+import org.apache.qpid.proton.engine.Transport;
 import org.apache.qpid.proton.engine.impl.TransportOutput;
+
+import java.nio.ByteBuffer;
 
 public class CannedTransportOutput implements TransportOutput
 {
@@ -43,7 +44,7 @@ public class CannedTransportOutput implements TransportOutput
     public void setOutput(String output)
     {
         _cannedOutput = ByteBuffer.wrap(output.getBytes());
-        _head = _cannedOutput.asReadOnlyBuffer();
+        _head = Transport.DISABLE_READONLY_BUFFER ? _cannedOutput.duplicate() : _cannedOutput.asReadOnlyBuffer();
         _popped = 0;
     }
 
