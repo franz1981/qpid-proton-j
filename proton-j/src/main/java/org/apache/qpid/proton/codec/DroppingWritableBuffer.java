@@ -33,6 +33,12 @@ public class DroppingWritableBuffer implements WritableBuffer
     }
 
     @Override
+    public void put(int index, byte b)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void put(byte b)
     {
         _pos += 1;

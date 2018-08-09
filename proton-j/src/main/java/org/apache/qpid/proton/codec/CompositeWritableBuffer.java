@@ -34,6 +34,12 @@ public class CompositeWritableBuffer implements WritableBuffer
         _second = second;
     }
 
+    @Override
+    public void put(int index, byte b)
+    {
+        throw new UnsupportedOperationException();
+    }
+
     public void put(byte b)
     {
         (_first.hasRemaining() ? _first : _second).put(b);

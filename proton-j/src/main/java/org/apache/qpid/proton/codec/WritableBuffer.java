@@ -27,6 +27,8 @@ public interface WritableBuffer
 {
     void put(byte b);
 
+    void put(int index, byte b);
+
     void putFloat(float f);
 
     void putDouble(double d);
@@ -66,6 +68,19 @@ public interface WritableBuffer
         public void put(byte b)
         {
             _buf.put(b);
+        }
+
+        @Override
+        public void put(int index, byte b)
+        {
+            if (_buf.hasArray())
+            {
+                _buf.array()[_buf.arrayOffset() + index] = b;
+            }
+            else
+            {
+                _buf.put(index, b);
+            }
         }
 
         @Override

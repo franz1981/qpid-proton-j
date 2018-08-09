@@ -806,24 +806,27 @@ public final class EncoderImpl implements ByteBufferEncoder
     {
         final int length = string.length();
         int c;
-
+        int pos = _buffer.position();
         for (int i = 0; i < length; i++)
         {
             c = string.charAt(i);
             if ((c & 0xFF80) == 0)          /* U+0000..U+007F */
             {
-                _buffer.put((byte) c);
+                _buffer.put(pos, (byte) c);
+                pos++;
             }
             else if ((c & 0xF800) == 0)     /* U+0080..U+07FF */
             {
-                _buffer.put((byte)(0xC0 | ((c >> 6) & 0x1F)));
-                _buffer.put((byte)(0x80 | (c & 0x3F)));
+                _buffer.put(pos,(byte)(0xC0 | ((c >> 6) & 0x1F)));
+                _buffer.put(pos+1,(byte)(0x80 | (c & 0x3F)));
+                pos+=2;
             }
             else if ((c & 0xD800) != 0xD800 || (c > 0xDBFF))     /* U+0800..U+FFFF - excluding surrogate pairs */
             {
-                _buffer.put((byte)(0xE0 | ((c >> 12) & 0x0F)));
-                _buffer.put((byte)(0x80 | ((c >> 6) & 0x3F)));
-                _buffer.put((byte)(0x80 | (c & 0x3F)));
+                _buffer.put(pos,(byte)(0xE0 | ((c >> 12) & 0x0F)));
+                _buffer.put(pos+1,(byte)(0x80 | ((c >> 6) & 0x3F)));
+                _buffer.put(pos-2,(byte)(0x80 | (c & 0x3F)));
+                pos+=3;
             }
             else
             {
@@ -836,12 +839,14 @@ public final class EncoderImpl implements ByteBufferEncoder
 
                 c = 0x010000 + ((c & 0x03FF) << 10) + (low & 0x03FF);
 
-                _buffer.put((byte)(0xF0 | ((c >> 18) & 0x07)));
-                _buffer.put((byte)(0x80 | ((c >> 12) & 0x3F)));
-                _buffer.put((byte)(0x80 | ((c >> 6) & 0x3F)));
-                _buffer.put((byte)(0x80 | (c & 0x3F)));
+                _buffer.put(pos,(byte)(0xF0 | ((c >> 18) & 0x07)));
+                _buffer.put(pos+1,(byte)(0x80 | ((c >> 12) & 0x3F)));
+                _buffer.put(pos+2,(byte)(0x80 | ((c >> 6) & 0x3F)));
+                _buffer.put(pos+3,(byte)(0x80 | (c & 0x3F)));
+                pos+=4;
             }
         }
+        _buffer.position(pos);
     }
 
     AMQPType getNullTypeEncoder()
