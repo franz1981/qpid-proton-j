@@ -21,9 +21,6 @@
 
 package org.apache.qpid.proton.engine.impl;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import org.apache.qpid.proton.amqp.Binary;
 import org.apache.qpid.proton.amqp.UnsignedInteger;
 import org.apache.qpid.proton.amqp.transport.Disposition;
@@ -31,6 +28,9 @@ import org.apache.qpid.proton.amqp.transport.Flow;
 import org.apache.qpid.proton.amqp.transport.Role;
 import org.apache.qpid.proton.amqp.transport.Transfer;
 import org.apache.qpid.proton.engine.Event;
+
+import java.util.HashMap;
+import java.util.Map;
 
 class TransportSession
 {
@@ -218,12 +218,11 @@ class TransportSession
 
     public UnsignedInteger allocateLocalHandle(TransportLink transportLink)
     {
-        for(int i = 0; i <= HANDLE_MAX; i++)
+        for (int i = 0; i <= HANDLE_MAX; i++)
         {
             UnsignedInteger handle = UnsignedInteger.valueOf(i);
-            if(!_localHandlesMap.containsKey(handle))
+            if (_localHandlesMap.putIfAbsent(handle, transportLink) == null)
             {
-                _localHandlesMap.put(handle, transportLink);
                 transportLink.setLocalHandle(handle);
                 return handle;
             }
@@ -263,38 +262,12 @@ class TransportSession
 
     public void handleTransfer(Transfer transfer, Binary payload)
     {
-        DeliveryImpl delivery;
+
         incrementNextIncomingId(); // The conceptual/non-wire transfer-id, for the session window.
 
-        TransportReceiver transportReceiver = (TransportReceiver) getLinkFromRemoteHandle(transfer.getHandle());
-        UnsignedInteger linkIncomingDeliveryId = transportReceiver.getIncomingDeliveryId();
-        UnsignedInteger deliveryId = transfer.getDeliveryId();
+        final TransportReceiver transportReceiver = (TransportReceiver) getLinkFromRemoteHandle(transfer.getHandle());
 
-        if(linkIncomingDeliveryId != null && (linkIncomingDeliveryId.equals(deliveryId) || deliveryId == null))
-        {
-            delivery = _unsettledIncomingDeliveriesById.get(linkIncomingDeliveryId);
-            delivery.getTransportDelivery().incrementSessionSize();
-        }
-        else
-        {
-            verifyNewDeliveryIdSequence(_incomingDeliveryId, linkIncomingDeliveryId, deliveryId);
-
-            _incomingDeliveryId = deliveryId;
-
-            ReceiverImpl receiver = transportReceiver.getReceiver();
-            Binary deliveryTag = transfer.getDeliveryTag();
-            delivery = receiver.delivery(deliveryTag.getArray(), deliveryTag.getArrayOffset(),
-                                                      deliveryTag.getLength());
-            UnsignedInteger messageFormat = transfer.getMessageFormat();
-            if(messageFormat != null) {
-                delivery.setMessageFormat(messageFormat.intValue());
-            }
-            TransportDelivery transportDelivery = new TransportDelivery(deliveryId, delivery, transportReceiver);
-            delivery.setTransportDelivery(transportDelivery);
-            transportReceiver.setIncomingDeliveryId(deliveryId);
-            _unsettledIncomingDeliveriesById.put(deliveryId, delivery);
-            getSession().incrementIncomingDeliveries(1);
-        }
+        final DeliveryImpl delivery = getOrCreateDelivery(transfer, transportReceiver);
 
         if( transfer.getState()!=null )
         {
@@ -313,15 +286,7 @@ class TransportSession
 
         if(!transfer.getMore() || aborted)
         {
-            transportReceiver.setIncomingDeliveryId(null);
-            if(aborted) {
-                delivery.setAborted();
-            } else {
-                delivery.setComplete();
-            }
-
-            delivery.getLink().getTransportLink().decrementLinkCredit();
-            delivery.getLink().getTransportLink().incrementDeliveryCount();
+            completedTransfer(transportReceiver, delivery, aborted);
         }
 
         if(Boolean.TRUE.equals(transfer.getSettled()) || aborted)
@@ -337,6 +302,70 @@ class TransportSession
         }
 
         getSession().getConnection().put(Event.Type.DELIVERY, delivery);
+    }
+
+    private static void completedTransfer(
+        TransportReceiver transportReceiver,
+        DeliveryImpl delivery,
+        boolean aborted)
+    {
+        transportReceiver.setIncomingDeliveryId(null);
+        if (aborted)
+        {
+            delivery.setAborted();
+        }
+        else
+        {
+            delivery.setComplete();
+        }
+
+        delivery.getLink().getTransportLink().decrementLinkCredit();
+        delivery.getLink().getTransportLink().incrementDeliveryCount();
+    }
+
+    private DeliveryImpl createIncomingDelivery(
+        Transfer transfer,
+        TransportReceiver transportReceiver,
+        UnsignedInteger linkIncomingDeliveryId,
+        UnsignedInteger deliveryId)
+    {
+        verifyNewDeliveryIdSequence(_incomingDeliveryId, linkIncomingDeliveryId, deliveryId);
+
+        _incomingDeliveryId = deliveryId;
+
+        ReceiverImpl receiver = transportReceiver.getReceiver();
+        Binary deliveryTag = transfer.getDeliveryTag();
+        DeliveryImpl delivery = receiver.delivery(deliveryTag.getArray(), deliveryTag.getArrayOffset(),
+            deliveryTag.getLength());
+        UnsignedInteger messageFormat = transfer.getMessageFormat();
+        if (messageFormat != null)
+        {
+            delivery.setMessageFormat(messageFormat.intValue());
+        }
+        TransportDelivery transportDelivery = new TransportDelivery(deliveryId, delivery, transportReceiver);
+        delivery.setTransportDelivery(transportDelivery);
+        transportReceiver.setIncomingDeliveryId(deliveryId);
+        _unsettledIncomingDeliveriesById.put(deliveryId, delivery);
+        getSession().incrementIncomingDeliveries(1);
+        return delivery;
+    }
+
+    private DeliveryImpl getOrCreateDelivery(Transfer transfer, TransportReceiver transportReceiver)
+    {
+        UnsignedInteger linkIncomingDeliveryId = transportReceiver.getIncomingDeliveryId();
+        UnsignedInteger deliveryId = transfer.getDeliveryId();
+        final DeliveryImpl delivery;
+
+        if (linkIncomingDeliveryId != null && (linkIncomingDeliveryId.equals(deliveryId) || deliveryId == null))
+        {
+            delivery = _unsettledIncomingDeliveriesById.get(linkIncomingDeliveryId);
+            delivery.getTransportDelivery().incrementSessionSize();
+        }
+        else
+        {
+            delivery = createIncomingDelivery(transfer, transportReceiver, linkIncomingDeliveryId, deliveryId);
+        }
+        return delivery;
     }
 
     private void verifyNewDeliveryIdSequence(UnsignedInteger previousId, UnsignedInteger linkIncomingId, UnsignedInteger newDeliveryId) {
@@ -421,30 +450,59 @@ class TransportSession
         UnsignedInteger id = disposition.getFirst();
         UnsignedInteger last = disposition.getLast() == null ? id : disposition.getLast();
         final Map<UnsignedInteger, DeliveryImpl> unsettledDeliveries =
-                disposition.getRole() == Role.RECEIVER ? _unsettledOutgoingDeliveriesById
-                        : _unsettledIncomingDeliveriesById;
-
-        while(id.compareTo(last)<=0)
+            disposition.getRole() == Role.RECEIVER ? _unsettledOutgoingDeliveriesById
+                : _unsettledIncomingDeliveriesById;
+        final ConnectionImpl connection = getSession().getConnection();
+        if (id.compareTo(last) == 0)
         {
-            DeliveryImpl delivery = unsettledDeliveries.get(id);
-            if(delivery != null)
-            {
-                if(disposition.getState() != null)
-                {
-                    delivery.setRemoteDeliveryState(disposition.getState());
-                }
-                if(Boolean.TRUE.equals(disposition.getSettled()))
-                {
-                    delivery.setRemoteSettled(true);
-                    unsettledDeliveries.remove(id);
-                }
-                delivery.updateWork();
-
-                getSession().getConnection().put(Event.Type.DELIVERY, delivery);
-            }
-            id = id.add(UnsignedInteger.ONE);
+            updateDeliveryOnConnectionIfUnsettled(unsettledDeliveries, disposition, connection, id);
+        }
+        else
+        {
+            updateDeliveries(id, last, unsettledDeliveries, disposition, connection);
         }
         //TODO - Implement.
+    }
+
+    private static void updateDeliveries(
+        UnsignedInteger id,
+        UnsignedInteger last,
+        Map<UnsignedInteger, DeliveryImpl> unsettledDeliveries,
+        Disposition disposition,
+        ConnectionImpl connection)
+    {
+        while (id.compareTo(last) <= 0)
+        {
+            updateDeliveryOnConnectionIfUnsettled(unsettledDeliveries, disposition, connection, id);
+            id = id.add(UnsignedInteger.ONE);
+        }
+    }
+
+    private static void updateDeliveryOnConnectionIfUnsettled(
+        Map<UnsignedInteger, DeliveryImpl> unsettledDeliveries,
+        Disposition disposition,
+        ConnectionImpl connection,
+        UnsignedInteger id)
+    {
+        final DeliveryImpl delivery;
+        if (disposition.getSettled())
+        {
+            delivery = unsettledDeliveries.remove(id);
+            delivery.setRemoteSettled(true);
+        }
+        else
+        {
+            delivery = unsettledDeliveries.get(id);
+        }
+        if (delivery != null)
+        {
+            if (disposition.getState() != null)
+            {
+                delivery.setRemoteDeliveryState(disposition.getState());
+            }
+            delivery.updateWork();
+        }
+        connection.put(Event.Type.DELIVERY, delivery);
     }
 
     void addUnsettledOutgoing(UnsignedInteger deliveryId, DeliveryImpl delivery)

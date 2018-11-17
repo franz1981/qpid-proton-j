@@ -44,17 +44,23 @@ public class SymbolType extends AbstractPrimitiveType<Symbol>
                 Symbol symbol = _symbolCache.get(buffer);
                 if (symbol == null)
                 {
-                    byte[] bytes = new byte[buffer.limit()];
-                    buffer.get(bytes);
-
-                    String str = new String(bytes, ASCII_CHARSET);
-                    symbol = Symbol.getSymbol(str);
-
-                    _symbolCache.put(ReadableBuffer.ByteBufferReader.wrap(bytes), symbol);
+                    symbol = poolSymbol(_symbolCache, buffer);
                 }
                 return symbol;
             }
         };
+
+    private static Symbol poolSymbol(Map<ReadableBuffer, Symbol> symbolCache, ReadableBuffer buffer)
+    {
+        byte[] bytes = new byte[buffer.limit()];
+        buffer.get(bytes);
+
+        String str = new String(bytes, ASCII_CHARSET);
+        Symbol symbol = Symbol.getSymbol(str);
+
+        symbolCache.put(ReadableBuffer.ByteBufferReader.wrap(bytes), symbol);
+        return symbol;
+    }
 
     public static interface SymbolEncoding extends PrimitiveTypeEncoding<Symbol>
     {

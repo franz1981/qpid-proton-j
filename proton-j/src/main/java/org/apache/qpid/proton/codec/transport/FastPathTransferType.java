@@ -83,31 +83,48 @@ public class FastPathTransferType implements AMQPType<Transfer>, FastPathDescrib
                 throw new DecodeException("Incorrect type found in Transfer encoding: " + typeCode);
         }
 
-        Transfer transfer = new Transfer();
+        return createTransfer(decoder, count);
+    }
 
-        for (int index = 0; index < count; ++index) {
-            switch (index) {
-                case 0:
-                    transfer.setHandle(decoder.readUnsignedInteger());
-                    break;
-                case 1:
-                    transfer.setDeliveryId(decoder.readUnsignedInteger());
-                    break;
-                case 2:
-                    transfer.setDeliveryTag(decoder.readBinary());
-                    break;
-                case 3:
-                    transfer.setMessageFormat(decoder.readUnsignedInteger());
-                    break;
-                case 4:
-                    transfer.setSettled(decoder.readBoolean());
-                    break;
+    private static Transfer createTransfer(DecoderImpl decoder, int count)
+    {
+        if (count >= 4)
+        {
+            Transfer transfer = new Transfer();
+            transfer.setHandle(decoder.readUnsignedInteger());
+            transfer.setDeliveryId(decoder.readUnsignedInteger());
+            transfer.setDeliveryTag(decoder.readBinary());
+            transfer.setMessageFormat(decoder.readUnsignedInteger());
+            if (count > 4)
+            {
+                transfer.setSettled(decoder.readBoolean());
+                if (count > 5)
+                {
+                    readRestOfBigTransfer(decoder, transfer, count);
+                }
+            }
+            return transfer;
+        }
+        else
+        {
+            return createTinyTransfer(decoder, count);
+        }
+    }
+
+    private static void readRestOfBigTransfer(DecoderImpl decoder, Transfer transfer, int count)
+    {
+        assert count > 5;
+        for (int index = 5; index < count; ++index)
+        {
+            switch (index)
+            {
                 case 5:
                     transfer.setMore(decoder.readBoolean(false));
                     break;
                 case 6:
                     UnsignedByte rcvSettleMode = decoder.readUnsignedByte();
-                    transfer.setRcvSettleMode(rcvSettleMode == null ? null : ReceiverSettleMode.values()[rcvSettleMode.intValue()]);
+                    transfer.setRcvSettleMode(
+                        rcvSettleMode == null ? null : ReceiverSettleMode.values()[rcvSettleMode.intValue()]);
                     break;
                 case 7:
                     transfer.setState((DeliveryState) decoder.readObject());
@@ -125,7 +142,21 @@ public class FastPathTransferType implements AMQPType<Transfer>, FastPathDescrib
                     throw new IllegalStateException("To many entries in Transfer encoding");
             }
         }
+    }
 
+    private static Transfer createTinyTransfer(DecoderImpl decoder, int count)
+    {
+        assert count < 4;
+        Transfer transfer = new Transfer();
+        transfer.setHandle(decoder.readUnsignedInteger());
+        if (count > 1)
+        {
+            transfer.setDeliveryId(decoder.readUnsignedInteger());
+            if (count > 2)
+            {
+                transfer.setDeliveryTag(decoder.readBinary());
+            }
+        }
         return transfer;
     }
 

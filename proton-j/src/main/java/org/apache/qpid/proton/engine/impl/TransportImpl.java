@@ -410,52 +410,61 @@ public class TransportImpl extends EndpointImpl
             while(endpoint != null)
             {
 
-                if(endpoint instanceof LinkImpl)
+                if (endpoint instanceof LinkImpl)
                 {
-                    LinkImpl link = (LinkImpl) endpoint;
-                    TransportLink<?> transportLink = getTransportState(link);
-                    SessionImpl session = link.getSession();
-                    TransportSession transportSession = getTransportState(session);
-
-                    if(((link.getLocalState() == EndpointState.CLOSED) || link.detached())
-                       && transportLink.isLocalHandleSet()
-                       && transportSession.isLocalChannelSet()
-                       && !_isCloseSent)
-                    {
-                        if((link instanceof SenderImpl)
-                           && link.getQueued() > 0
-                           && !transportLink.detachReceived()
-                           && !transportSession.endReceived()
-                           && !_closeReceived) {
-                            endpoint = endpoint.transportNext();
-                            continue;
-                        }
-
-                        UnsignedInteger localHandle = transportLink.getLocalHandle();
-                        transportLink.clearLocalHandle();
-                        transportSession.freeLocalHandle(localHandle);
-
-
-                        Detach detach = new Detach();
-                        detach.setHandle(localHandle);
-                        detach.setClosed(!link.detached());
-
-                        ErrorCondition localError = link.getCondition();
-                        if( localError.getCondition() !=null )
-                        {
-                            detach.setError(localError);
-                        }
-
-
-                        writeFrame(transportSession.getLocalChannel(), detach, null, null);
-                    }
-
-                    endpoint.clearModified();
-
+                    processDetachLink((LinkImpl) endpoint);
                 }
                 endpoint = endpoint.transportNext();
             }
         }
+    }
+
+    private void processDetachLink(LinkImpl link)
+    {
+        if ((link.getLocalState() == EndpointState.CLOSED) || link.detached())
+        {
+            TransportLink<?> transportLink = getTransportState(link);
+            if (transportLink.isLocalHandleSet())
+            {
+                SessionImpl session = link.getSession();
+                TransportSession transportSession = getTransportState(session);
+                if (transportSession.isLocalChannelSet() && !_isCloseSent)
+                {
+                    if ((link instanceof SenderImpl)
+                        && link.getQueued() > 0
+                        && !transportLink.detachReceived()
+                        && !transportSession.endReceived()
+                        && !_closeReceived)
+                    {
+                        return;
+                    }
+
+                    writeDetachFrame(link, transportLink, transportSession);
+                }
+            }
+        }
+
+        link.clearModified();
+    }
+
+    private void writeDetachFrame(LinkImpl link, TransportLink<?> transportLink, TransportSession transportSession)
+    {
+        UnsignedInteger localHandle = transportLink.getLocalHandle();
+        transportLink.clearLocalHandle();
+        transportSession.freeLocalHandle(localHandle);
+
+
+        Detach detach = new Detach();
+        detach.setHandle(localHandle);
+        detach.setClosed(!link.detached());
+
+        ErrorCondition localError = link.getCondition();
+        if (localError.getCondition() != null)
+        {
+            detach.setError(localError);
+        }
+
+        writeFrame(transportSession.getLocalChannel(), detach, null, null);
     }
 
     private void writeFlow(TransportSession ssn, TransportLink link)
@@ -545,120 +554,160 @@ public class TransportImpl extends EndpointImpl
            tpSession.isLocalChannelSet() &&
            tpLink.getLocalHandle() != null && !_frameWriter.isFull())
         {
-            DeliveryImpl inProgress = tpLink.getInProgressDelivery();
-            if(inProgress != null){
-                // There is an existing Delivery awaiting completion. Check it
-                // is the same Delivery object given and return if not, as we
-                // can't interleave Transfer frames for deliveries on a link.
-                if(inProgress != delivery) {
-                    return false;
-                }
-            }
-
-            TransportDelivery tpDelivery = delivery.getTransportDelivery();
-            UnsignedInteger deliveryId;
-            if (tpDelivery != null) {
-                deliveryId = tpDelivery.getDeliveryId();
-            } else {
-                deliveryId = tpSession.getOutgoingDeliveryId();
-                tpSession.incrementOutgoingDeliveryId();
-            }
-            tpDelivery = new TransportDelivery(deliveryId, delivery, tpLink);
-            delivery.setTransportDelivery(tpDelivery);
-
-            final Transfer transfer = new Transfer();
-            transfer.setDeliveryId(deliveryId);
-            transfer.setDeliveryTag(new Binary(delivery.getTag()));
-            transfer.setHandle(tpLink.getLocalHandle());
-
-            if(delivery.getLocalState() != null)
+            if (!processTransportWorkSenderDelivery(delivery, snd, tpLink, tpSession, session))
             {
-                transfer.setState(delivery.getLocalState());
-            }
-
-            if(delivery.isSettled())
-            {
-                transfer.setSettled(Boolean.TRUE);
-            }
-            else
-            {
-                tpSession.addUnsettledOutgoing(deliveryId, delivery);
-            }
-
-            if(snd.current() == delivery)
-            {
-                transfer.setMore(true);
-            }
-
-            int messageFormat = delivery.getMessageFormat();
-            if(messageFormat == DeliveryImpl.DEFAULT_MESSAGE_FORMAT) {
-                transfer.setMessageFormat(UnsignedInteger.ZERO);
-            } else {
-                transfer.setMessageFormat(UnsignedInteger.valueOf(messageFormat));
-            }
-
-            ReadableBuffer payload = delivery.getData();
-
-            int pending = payload.remaining();
-
-            try {
-                writeFrame(tpSession.getLocalChannel(), transfer, payload, partialTransferHandler.setTransfer(transfer));
-            } finally {
-                partialTransferHandler.setTransfer(null);
-                delivery.afterSend();  // Allow for freeing resources after write of buffered data
-            }
-
-            tpSession.incrementOutgoingId();
-            tpSession.decrementRemoteIncomingWindow();
-
-            if (payload == null || !payload.hasRemaining())
-            {
-                session.incrementOutgoingBytes(-pending);
-
-                if (!transfer.getMore()) {
-                    // Clear the in-progress delivery marker
-                    tpLink.setInProgressDelivery(null);
-
-                    delivery.setDone();
-                    tpLink.setDeliveryCount(tpLink.getDeliveryCount().add(UnsignedInteger.ONE));
-                    tpLink.setLinkCredit(tpLink.getLinkCredit().subtract(UnsignedInteger.ONE));
-                    session.incrementOutgoingDeliveries(-1);
-                    snd.decrementQueued();
-                }
-            }
-            else
-            {
-                session.incrementOutgoingBytes(-(pending - payload.remaining()));
-
-                // Remember the delivery we are still processing
-                // the body transfer frames for
-                tpLink.setInProgressDelivery(delivery);
-            }
-
-            if (_emitFlowEventOnSend && snd.getLocalState() != EndpointState.CLOSED) {
-                getConnectionImpl().put(Event.Type.LINK_FLOW, snd);
+                return false;
             }
         }
 
-        if(wasDone && delivery.getLocalState() != null)
+        if (wasDone && delivery.getLocalState() != null)
         {
-            TransportDelivery tpDelivery = delivery.getTransportDelivery();
-            Disposition disposition = new Disposition();
-            disposition.setFirst(tpDelivery.getDeliveryId());
-            disposition.setLast(tpDelivery.getDeliveryId());
-            disposition.setRole(Role.SENDER);
-            disposition.setSettled(delivery.isSettled());
-            if(delivery.isSettled())
-            {
-                tpDelivery.settled();
-            }
-            disposition.setState(delivery.getLocalState());
-
-            writeFrame(tpSession.getLocalChannel(), disposition, null,
-                       null);
+            writeDispositionFrame(delivery, tpSession);
         }
 
         return !delivery.isBuffered();
+    }
+
+    private void writeDispositionFrame(DeliveryImpl delivery, TransportSession tpSession)
+    {
+        final Disposition disposition = createDisposition(delivery);
+        writeFrame(tpSession.getLocalChannel(), disposition, null,
+            null);
+    }
+
+    private static Disposition createDisposition(DeliveryImpl delivery)
+    {
+        TransportDelivery tpDelivery = delivery.getTransportDelivery();
+        Disposition disposition = new Disposition();
+        disposition.setFirst(tpDelivery.getDeliveryId());
+        disposition.setLast(tpDelivery.getDeliveryId());
+        disposition.setRole(Role.SENDER);
+        disposition.setSettled(delivery.isSettled());
+        if (delivery.isSettled())
+        {
+            tpDelivery.settled();
+        }
+        disposition.setState(delivery.getLocalState());
+        return disposition;
+    }
+
+    private boolean processTransportWorkSenderDelivery(
+        DeliveryImpl delivery,
+        SenderImpl snd,
+        TransportSender tpLink,
+        TransportSession tpSession,
+        SessionImpl session)
+    {
+        DeliveryImpl inProgress = tpLink.getInProgressDelivery();
+        if(inProgress != null){
+            // There is an existing Delivery awaiting completion. Check it
+            // is the same Delivery object given and return if not, as we
+            // can't interleave Transfer frames for deliveries on a link.
+            if(inProgress != delivery) {
+                return false;
+            }
+        }
+
+        Transfer transfer = createTransferFrame(delivery, snd, tpLink, tpSession);
+
+        ReadableBuffer payload = delivery.getData();
+
+        int pending = payload.remaining();
+
+        try {
+            writeFrame(tpSession.getLocalChannel(), transfer, payload, partialTransferHandler.setTransfer(transfer));
+        } finally {
+            partialTransferHandler.setTransfer(null);
+            delivery.afterSend();  // Allow for freeing resources after write of buffered data
+        }
+
+        tpSession.incrementOutgoingId();
+        tpSession.decrementRemoteIncomingWindow();
+
+        if (payload == null || !payload.hasRemaining())
+        {
+            session.incrementOutgoingBytes(-pending);
+
+            if (!transfer.getMore()) {
+                // Clear the in-progress delivery marker
+                tpLink.setInProgressDelivery(null);
+
+                delivery.setDone();
+                tpLink.setDeliveryCount(tpLink.getDeliveryCount().add(UnsignedInteger.ONE));
+                tpLink.setLinkCredit(tpLink.getLinkCredit().subtract(UnsignedInteger.ONE));
+                session.incrementOutgoingDeliveries(-1);
+                snd.decrementQueued();
+            }
+        }
+        else
+        {
+            session.incrementOutgoingBytes(-(pending - payload.remaining()));
+
+            // Remember the delivery we are still processing
+            // the body transfer frames for
+            tpLink.setInProgressDelivery(delivery);
+        }
+
+        if (_emitFlowEventOnSend && snd.getLocalState() != EndpointState.CLOSED) {
+            getConnectionImpl().put(Event.Type.LINK_FLOW, snd);
+        }
+        return true;
+    }
+
+    private static Transfer createTransferFrame(
+        DeliveryImpl delivery,
+        SenderImpl snd,
+        TransportSender tpLink,
+        TransportSession tpSession)
+    {
+        TransportDelivery tpDelivery = delivery.getTransportDelivery();
+        UnsignedInteger deliveryId;
+        if (tpDelivery != null)
+        {
+            deliveryId = tpDelivery.getDeliveryId();
+        }
+        else
+        {
+            deliveryId = tpSession.getOutgoingDeliveryId();
+            tpSession.incrementOutgoingDeliveryId();
+        }
+        tpDelivery = new TransportDelivery(deliveryId, delivery, tpLink);
+        delivery.setTransportDelivery(tpDelivery);
+
+        final Transfer transfer = new Transfer();
+        transfer.setDeliveryId(deliveryId);
+        transfer.setDeliveryTag(new Binary(delivery.getTag()));
+        transfer.setHandle(tpLink.getLocalHandle());
+
+        if (delivery.getLocalState() != null)
+        {
+            transfer.setState(delivery.getLocalState());
+        }
+
+        if (delivery.isSettled())
+        {
+            transfer.setSettled(Boolean.TRUE);
+        }
+        else
+        {
+            tpSession.addUnsettledOutgoing(deliveryId, delivery);
+        }
+
+        if (snd.current() == delivery)
+        {
+            transfer.setMore(true);
+        }
+
+        int messageFormat = delivery.getMessageFormat();
+        if (messageFormat == DeliveryImpl.DEFAULT_MESSAGE_FORMAT)
+        {
+            transfer.setMessageFormat(UnsignedInteger.ZERO);
+        }
+        else
+        {
+            transfer.setMessageFormat(UnsignedInteger.valueOf(messageFormat));
+        }
+        return transfer;
     }
 
     private boolean processTransportWorkReceiver(DeliveryImpl delivery,
@@ -745,92 +794,115 @@ public class TransportImpl extends EndpointImpl
 
     private void processAttach()
     {
-        if(_connectionEndpoint != null && _isOpenSent && !_isCloseSent)
+        if (_connectionEndpoint != null && _isOpenSent && !_isCloseSent)
         {
             EndpointImpl endpoint = _connectionEndpoint.getTransportHead();
 
-            while(endpoint != null)
+            while (endpoint != null)
             {
-                if(endpoint instanceof LinkImpl)
+                if (endpoint instanceof LinkImpl)
                 {
-
-                    LinkImpl link = (LinkImpl) endpoint;
-                    TransportLink<?> transportLink = getTransportState(link);
-                    SessionImpl session = link.getSession();
-                    TransportSession transportSession = getTransportState(session);
-                    if(link.getLocalState() != EndpointState.UNINITIALIZED && !transportLink.attachSent() && transportSession.isLocalChannelSet())
-                    {
-
-                        if( (link.getRemoteState() == EndpointState.ACTIVE
-                            && !transportLink.isLocalHandleSet()) || link.getRemoteState() == EndpointState.UNINITIALIZED)
-                        {
-
-                            UnsignedInteger localHandle = transportSession.allocateLocalHandle(transportLink);
-
-                            if(link.getRemoteState() == EndpointState.UNINITIALIZED)
-                            {
-                                transportSession.addHalfOpenLink(transportLink);
-                            }
-
-                            Attach attach = new Attach();
-                            attach.setHandle(localHandle);
-                            attach.setName(transportLink.getName());
-
-                            if(link.getSenderSettleMode() != null)
-                            {
-                                attach.setSndSettleMode(link.getSenderSettleMode());
-                            }
-
-                            if(link.getReceiverSettleMode() != null)
-                            {
-                                attach.setRcvSettleMode(link.getReceiverSettleMode());
-                            }
-
-                            if(link.getSource() != null)
-                            {
-                                attach.setSource(link.getSource());
-                            }
-
-                            if(link.getTarget() != null)
-                            {
-                                attach.setTarget(link.getTarget());
-                            }
-
-                            if(link.getProperties() != null)
-                            {
-                                attach.setProperties(link.getProperties());
-                            }
-
-                            if(link.getOfferedCapabilities() != null)
-                            {
-                                attach.setOfferedCapabilities(link.getOfferedCapabilities());
-                            }
-
-                            if(link.getDesiredCapabilities() != null)
-                            {
-                                attach.setDesiredCapabilities(link.getDesiredCapabilities());
-                            }
-
-                            if(link.getMaxMessageSize() != null)
-                            {
-                                attach.setMaxMessageSize(link.getMaxMessageSize());
-                            }
-
-                            attach.setRole(endpoint instanceof ReceiverImpl ? Role.RECEIVER : Role.SENDER);
-
-                            if(link instanceof SenderImpl)
-                            {
-                                attach.setInitialDeliveryCount(UnsignedInteger.ZERO);
-                            }
-
-                            writeFrame(transportSession.getLocalChannel(), attach, null, null);
-                            transportLink.sentAttach();
-                        }
-                    }
+                    processAttachLink((LinkImpl) endpoint);
                 }
                 endpoint = endpoint.transportNext();
             }
         }
+    }
+
+    private void processAttachLink(LinkImpl link)
+    {
+        if (link.getLocalState() != EndpointState.UNINITIALIZED)
+        {
+            TransportLink<?> transportLink = getTransportState(link);
+            if (!transportLink.attachSent())
+            {
+                TransportSession transportSession = getTransportState(link.getSession());
+
+                if (transportSession.isLocalChannelSet())
+                {
+                    if ((link.getRemoteState() == EndpointState.ACTIVE
+                        && !transportLink.isLocalHandleSet()) || link.getRemoteState() == EndpointState.UNINITIALIZED)
+                    {
+                        sendAttachOfActiveLink(link, transportLink, transportSession);
+                    }
+                }
+            }
+        }
+    }
+
+    private void sendAttachOfActiveLink(
+        LinkImpl link,
+        TransportLink<?> transportLink,
+        TransportSession transportSession)
+    {
+        if (link.getRemoteState() == EndpointState.UNINITIALIZED)
+        {
+            transportSession.addHalfOpenLink(transportLink);
+        }
+
+        Attach attach = createAttach(link, transportLink, transportSession);
+
+        writeFrame(transportSession.getLocalChannel(), attach, null, null);
+        transportLink.sentAttach();
+    }
+
+    private static Attach createAttach(
+        LinkImpl link, TransportLink<?> transportLink,
+        TransportSession transportSession)
+    {
+        Attach attach = new Attach();
+        UnsignedInteger localHandle = transportSession.allocateLocalHandle(transportLink);
+        attach.setHandle(localHandle);
+        attach.setName(transportLink.getName());
+
+        if (link.getSenderSettleMode() != null)
+        {
+            attach.setSndSettleMode(link.getSenderSettleMode());
+        }
+
+        if (link.getReceiverSettleMode() != null)
+        {
+            attach.setRcvSettleMode(link.getReceiverSettleMode());
+        }
+
+        if (link.getSource() != null)
+        {
+            attach.setSource(link.getSource());
+        }
+
+        if (link.getTarget() != null)
+        {
+            attach.setTarget(link.getTarget());
+        }
+
+        if (link.getProperties() != null)
+        {
+            attach.setProperties(link.getProperties());
+        }
+
+        if (link.getOfferedCapabilities() != null)
+        {
+            attach.setOfferedCapabilities(link.getOfferedCapabilities());
+        }
+
+        if (link.getDesiredCapabilities() != null)
+        {
+            attach.setDesiredCapabilities(link.getDesiredCapabilities());
+        }
+
+        if (link.getMaxMessageSize() != null)
+        {
+            attach.setMaxMessageSize(link.getMaxMessageSize());
+        }
+
+        attach.setRole(link instanceof ReceiverImpl ? Role.RECEIVER : Role.SENDER);
+
+        if (link instanceof SenderImpl)
+        {
+            attach.setInitialDeliveryCount(UnsignedInteger.ZERO);
+        }
+
+        return attach;
     }
 
     private void processHeader()
@@ -880,54 +952,68 @@ public class TransportImpl extends EndpointImpl
 
     private void processBegin()
     {
-        if(_connectionEndpoint != null && _isOpenSent && !_isCloseSent)
+        if (_connectionEndpoint != null && _isOpenSent && !_isCloseSent)
         {
             EndpointImpl endpoint = _connectionEndpoint.getTransportHead();
-            while(endpoint != null)
+            while (endpoint != null)
             {
-                if(endpoint instanceof SessionImpl)
+                if (endpoint instanceof SessionImpl)
                 {
-                    SessionImpl session = (SessionImpl) endpoint;
-                    TransportSession transportSession = getTransportState(session);
-                    if(session.getLocalState() != EndpointState.UNINITIALIZED && !transportSession.beginSent())
-                    {
-                        int channelId = allocateLocalChannel(transportSession);
-                        Begin begin = new Begin();
-
-                        if(session.getRemoteState() != EndpointState.UNINITIALIZED)
-                        {
-                            begin.setRemoteChannel(UnsignedShort.valueOf((short) transportSession.getRemoteChannel()));
-                        }
-
-                        transportSession.updateIncomingWindow();
-
-                        begin.setHandleMax(transportSession.getHandleMax());
-                        begin.setIncomingWindow(transportSession.getIncomingWindowSize());
-                        begin.setOutgoingWindow(transportSession.getOutgoingWindowSize());
-                        begin.setNextOutgoingId(transportSession.getNextOutgoingId());
-
-                        if(session.getProperties() != null)
-                        {
-                            begin.setProperties(session.getProperties());
-                        }
-
-                        if(session.getOfferedCapabilities() != null)
-                        {
-                            begin.setOfferedCapabilities(session.getOfferedCapabilities());
-                        }
-
-                        if(session.getDesiredCapabilities() != null)
-                        {
-                            begin.setDesiredCapabilities(session.getDesiredCapabilities());
-                        }
-
-                        writeFrame(channelId, begin, null, null);
-                        transportSession.sentBegin();
-                    }
+                    processBeginSession((SessionImpl) endpoint);
                 }
                 endpoint = endpoint.transportNext();
             }
         }
+    }
+
+    private void processBeginSession(SessionImpl session)
+    {
+        if (session.getLocalState() != EndpointState.UNINITIALIZED)
+        {
+            TransportSession transportSession = getTransportState(session);
+            if (!transportSession.beginSent())
+            {
+                int channelId = allocateLocalChannel(transportSession);
+
+                Begin begin = createBegin(session, transportSession);
+
+                writeFrame(channelId, begin, null, null);
+                transportSession.sentBegin();
+            }
+        }
+    }
+
+    private static Begin createBegin(SessionImpl session, TransportSession transportSession)
+    {
+        Begin begin = new Begin();
+
+        if (session.getRemoteState() != EndpointState.UNINITIALIZED)
+        {
+            begin.setRemoteChannel(UnsignedShort.valueOf((short) transportSession.getRemoteChannel()));
+        }
+
+        transportSession.updateIncomingWindow();
+
+        begin.setHandleMax(transportSession.getHandleMax());
+        begin.setIncomingWindow(transportSession.getIncomingWindowSize());
+        begin.setOutgoingWindow(transportSession.getOutgoingWindowSize());
+        begin.setNextOutgoingId(transportSession.getNextOutgoingId());
+
+        if (session.getProperties() != null)
+        {
+            begin.setProperties(session.getProperties());
+        }
+
+        if (session.getOfferedCapabilities() != null)
+        {
+            begin.setOfferedCapabilities(session.getOfferedCapabilities());
+        }
+
+        if (session.getDesiredCapabilities() != null)
+        {
+            begin.setDesiredCapabilities(session.getDesiredCapabilities());
+        }
+        return begin;
     }
 
     private TransportSession getTransportState(SessionImpl session)
@@ -953,11 +1039,10 @@ public class TransportImpl extends EndpointImpl
 
     private int allocateLocalChannel(TransportSession transportSession)
     {
-        for (int i = 0; i < _connectionEndpoint.getMaxChannels(); i++)
+        for (int i = 0, maxChannels = _connectionEndpoint.getMaxChannels(); i < maxChannels; i++)
         {
-            if (!_localSessions.containsKey(i))
+            if (_localSessions.putIfAbsent(i, transportSession) == null)
             {
-                _localSessions.put(i, transportSession);
                 transportSession.setLocalChannel(i);
                 return i;
             }
@@ -981,31 +1066,9 @@ public class TransportImpl extends EndpointImpl
             EndpointImpl endpoint = _connectionEndpoint.getTransportHead();
             while(endpoint != null)
             {
-                SessionImpl session;
-                TransportSession transportSession;
-
-                if((endpoint instanceof SessionImpl)) {
-                    if ((session = (SessionImpl)endpoint).getLocalState() == EndpointState.CLOSED
-                        && (transportSession = session.getTransportSession()).isLocalChannelSet()
-                        && !_isCloseSent)
-                    {
-                        if (hasSendableMessages(session)) {
-                            endpoint = endpoint.transportNext();
-                            continue;
-                        }
-
-                        int channel = freeLocalChannel(transportSession);
-                        End end = new End();
-                        ErrorCondition localError = endpoint.getCondition();
-                        if( localError.getCondition() !=null )
-                        {
-                            end.setError(localError);
-                        }
-
-                        writeFrame(channel, end, null, null);
-                    }
-
-                    endpoint.clearModified();
+                if ((endpoint instanceof SessionImpl))
+                {
+                    processEndSession((SessionImpl) endpoint);
                 }
 
                 endpoint = endpoint.transportNext();
@@ -1013,29 +1076,69 @@ public class TransportImpl extends EndpointImpl
         }
     }
 
+    private void processEndSession(SessionImpl session)
+    {
+        TransportSession transportSession;
+        if (session.getLocalState() == EndpointState.CLOSED
+            && (transportSession = session.getTransportSession()).isLocalChannelSet()
+            && !_isCloseSent)
+        {
+            if (hasSendableMessages(session))
+            {
+                return;
+            }
+
+            writeEndFrame(session, transportSession);
+        }
+
+        session.clearModified();
+    }
+
+    private void writeEndFrame(SessionImpl session, TransportSession transportSession)
+    {
+        int channel = freeLocalChannel(transportSession);
+        End end = new End();
+        ErrorCondition localError = session.getCondition();
+        if (localError.getCondition() != null)
+        {
+            end.setError(localError);
+        }
+
+        writeFrame(channel, end, null, null);
+    }
+
     private boolean hasSendableMessages(SessionImpl session)
     {
-        if (_connectionEndpoint == null) {
+        if (_connectionEndpoint == null)
+        {
             return false;
         }
 
-        if(!_closeReceived && (session == null || !session.getTransportSession().endReceived()))
+        if (!_closeReceived && (session == null || !session.getTransportSession().endReceived()))
         {
             EndpointImpl endpoint = _connectionEndpoint.getTransportHead();
-            while(endpoint != null)
+            while (endpoint != null)
             {
-                if(endpoint instanceof SenderImpl)
+                if (endpoint instanceof SenderImpl)
                 {
-                    SenderImpl sender = (SenderImpl) endpoint;
-                    if((session == null || sender.getSession() == session)
-                       && sender.getQueued() != 0
-                        && !getTransportState(sender).detachReceived())
+                    if (hasSendableMessages((SenderImpl) endpoint, session))
                     {
                         return true;
                     }
                 }
                 endpoint = endpoint.transportNext();
             }
+        }
+        return false;
+    }
+
+    private boolean hasSendableMessages(SenderImpl sender, SessionImpl session)
+    {
+        if ((session == null || sender.getSession() == session)
+            && sender.getQueued() != 0
+            && !getTransportState(sender).detachReceived())
+        {
+            return true;
         }
         return false;
     }

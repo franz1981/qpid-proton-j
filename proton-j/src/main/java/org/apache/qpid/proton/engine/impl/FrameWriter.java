@@ -119,23 +119,34 @@ class FrameWriter {
         framesOutput++;
     }
 
-    private int writePerformative(Object frameBody, ReadableBuffer payload, Runnable onPayloadTooLarge) {
-        frameBuffer.position(frameStart + FRAME_HEADER_SIZE);
+    private int writePerformative(Object frameBody, ReadableBuffer payload, Runnable onPayloadTooLarge)
+    {
+        final int bodyPosition = frameStart + FRAME_HEADER_SIZE;
 
-        if (frameBody != null) {
-            encoder.writeObject(frameBody);
-        }
+        int performativeSize = writeFrameBody(frameBody, bodyPosition);
 
-        int performativeSize = frameBuffer.position() - frameStart;
-
-        if (onPayloadTooLarge != null && maxFrameSize > 0 && payload != null && (payload.remaining() + performativeSize) > maxFrameSize) {
+        if (onPayloadTooLarge != null && maxFrameSize > 0 && payload != null &&
+            (payload.remaining() + performativeSize) > maxFrameSize)
+        {
             // Next iteration will re-encode the frame body again with updates from the <payload-to-large>
             // handler and then we can move onto the body portion.
             onPayloadTooLarge.run();
-            performativeSize = writePerformative(frameBody, payload, null);
+            performativeSize = writeFrameBody(frameBody, bodyPosition);
         }
 
         return performativeSize;
+    }
+
+    private int writeFrameBody(Object frameBody, int position)
+    {
+        frameBuffer.position(position);
+
+        if (frameBody != null)
+        {
+            encoder.writeObject(frameBody);
+        }
+
+        return frameBuffer.position() - frameStart;
     }
 
     private void endFrame(int channel) {
